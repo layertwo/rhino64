@@ -2,15 +2,13 @@ package main
 
 import (
     "github.com/miekg/dns"
-    "net"
     "log"
-    )
-
+    "net"
+)
 
 var (
     prefix = net.IP{0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 )
-
 
 func main() {
     dns.HandleFunc(".", handleRequest)
@@ -19,7 +17,6 @@ func main() {
         log.Fatal("ListenAndServe: ", err)
     }
 }
-
 
 func makeRequest(name string, qtype uint16) []dns.RR {
 
@@ -41,7 +38,6 @@ func makeRequest(name string, qtype uint16) []dns.RR {
 
     return r.Answer
 }
-
 
 func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
@@ -72,7 +68,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
                             AAAA: makeSyntheticIPv6(a.(*dns.A).A),
                         }
                         m.Answer = append(m.Answer, rr)
-                     }
+                    }
                 }
             }
         }
@@ -82,7 +78,6 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
     w.Write(buf)
 
 }
-
 
 func makeSyntheticIPv6(ip net.IP) net.IP {
 
@@ -95,6 +90,3 @@ func makeSyntheticIPv6(ip net.IP) net.IP {
     return synth
 
 }
-
-
-
