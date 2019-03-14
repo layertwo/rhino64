@@ -24,7 +24,7 @@ func makeRequest(name string, qtype uint16) []dns.RR {
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
 
     m := new(dns.Msg)
-    m.SetQuestion(name, qtype)
+    m.SetQuestion(dns.Fqdn(name), qtype)
     m.RecursionDesired = true
 
     r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
@@ -63,9 +63,10 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
                     log.Printf("found %v answers for %s", len(answers), q.Name)
 
                     for _, a := range answers {
+                        record := a.(*dns.A)
                         rr := &dns.AAAA{
-                            Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: dns.ClassINET, Ttl: 0},
-                            AAAA: makeSyntheticIPv6(a.(*dns.A).A),
+                            Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: record.Hdr.Class, Ttl: record.Hdr.Ttl},
+                            AAAA: makeSyntheticIPv6(record.A),
                         }
                         m.Answer = append(m.Answer, rr)
                     }
