@@ -18,7 +18,7 @@ func main() {
     }
 }
 
-func makeRequest(name string, qtype uint16) []dns.RR {
+func makeRequest(name string, qtype uint16) (int, []dns.RR) {
 
     c := new(dns.Client)
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
@@ -28,15 +28,18 @@ func makeRequest(name string, qtype uint16) []dns.RR {
     m.RecursionDesired = true
 
     r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
-    if r == nil {
-        log.Fatalf("error: %s\n", err.Error())
+    if err != nil {
+        log.Fatalf("error: %s\n", err)
+    }
+    if len(r.Answer) == 0 {
+        log.Printf("could not find NS records for %s", name)
     }
 
-    if r.Rcode != dns.RcodeSuccess {
+    /* if r.Rcode != dns.RcodeSuccess {
         log.Fatalf("invalid answer name for query %s\n", name)
-    }
+    } */
 
-    return r.Answer
+    return r.Rcode, r.Answer
 }
 
 func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -46,19 +49,24 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
     for _, q := range m.Question {
 
-        answers := makeRequest(q.Name, q.Qtype)
+        rcode, answers := makeRequest(q.Name, q.Qtype)
+        if rcode != dns.RcodeSuccess {
+            continue
+        }
+
         if len(answers) > 0 {
             log.Printf("found %v answer(s) for %s", len(answers), q.Name)
             for _, a := range answers {
                 m.Answer = append(m.Answer, a)
             }
+
         } else {
             log.Printf("did not find %s answer for %s", dns.TypeToString[q.Qtype], q.Name)
 
             if q.Qtype == dns.TypeAAAA {
                 log.Printf("generating synthetic IPv6 addr for %s", q.Name)
 
-                answers := makeRequest(q.Name, dns.TypeA)
+                _, answers := makeRequest(q.Name, dns.TypeA)
                 if len(answers) > 0 {
                     log.Printf("found %v answers for %s", len(answers), q.Name)
 
@@ -75,8 +83,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
         }
     }
 
-    buf, _ := m.Pack()
-    w.Write(buf)
+    w.WriteMsg(m)
 
 }
 
