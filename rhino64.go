@@ -1,13 +1,21 @@
 package main
 
 import (
+    "github.com/go-redis/redis"
     "github.com/miekg/dns"
     "log"
     "net"
+    "strconv"
+    "time"
 )
 
 var (
     prefix = net.IP{0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    client = redis.NewClient(&redis.Options{
+        Addr: "localhost:32768",
+        Password: "",
+        DB: 0,
+    })
 )
 
 func main() {
@@ -20,19 +28,41 @@ func main() {
 
 func makeRequest(name string, qtype uint16, recursion bool) *dns.Msg {
 
-    c := new(dns.Client)
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
+    cache_name := strconv.Itoa(int(qtype)) + "-" + name
 
-    m := new(dns.Msg)
-    m.SetQuestion(dns.Fqdn(name), qtype)
-    m.RecursionDesired = recursion
+    // check cache
+    val, err := client.Get(cache_name).Result()
+    if err == redis.Nil {
 
-    r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
-    if err != nil {
-        log.Fatalf("error: %s\n", err)
+        log.Printf("%s not found in cache", name)
+
+        c := new(dns.Client)
+        m := new(dns.Msg)
+        m.SetQuestion(dns.Fqdn(name), qtype)
+        m.RecursionDesired = recursion
+
+        r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
+        if err != nil {
+            log.Fatalf("error: %s\n", err)
+        }
+        go func() {
+            msg, err := r.Pack()
+            err = client.Set(cache_name, msg, 60*time.Second).Err()
+            if err != nil {
+                log.Fatalf("error setting cache for %s with error %s", name, err)
+            } else {
+                log.Printf("added %s to cache", name)
+            }
+        }()
+        return r
+
+    } else {
+        log.Printf("found %s in cache", name)
+        m := new(dns.Msg)
+        m.Unpack([]byte(val))
+        return m
     }
-
-    return r
 }
 
 func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -48,7 +78,6 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
         if r.Rcode != dns.RcodeSuccess {
             continue
         }
-
 
         if len(r.Answer) > 0 {
             log.Printf("found %v answer(s) for %s", len(r.Answer), q.Name)
