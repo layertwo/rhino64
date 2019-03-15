@@ -18,14 +18,14 @@ func main() {
     }
 }
 
-func makeRequest(name string, qtype uint16) *dns.Msg {
+func makeRequest(name string, qtype uint16, recursion bool) *dns.Msg {
 
     c := new(dns.Client)
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
 
     m := new(dns.Msg)
     m.SetQuestion(dns.Fqdn(name), qtype)
-    m.RecursionDesired = true
+    m.RecursionDesired = recursion
 
     r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
     if err != nil {
@@ -44,7 +44,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
         r := new(dns.Msg)
 
-        r = makeRequest(q.Name, q.Qtype)
+        r = makeRequest(q.Name, q.Qtype, req.MsgHdr.RecursionDesired)
         if r.Rcode != dns.RcodeSuccess {
             continue
         }
@@ -63,7 +63,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
             case dns.TypeAAAA:
                 log.Printf("generating synthetic IPv6 addr for %s", q.Name)
 
-                r = makeRequest(q.Name, dns.TypeA)
+                r = makeRequest(q.Name, dns.TypeA, req.MsgHdr.RecursionDesired)
                 if len(r.Answer) > 0 {
                     log.Printf("found %v answers for %s", len(r.Answer), q.Name)
 
@@ -81,6 +81,9 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
     // carry soa name servers forward
     m.Ns = r.Ns
+    id := m.MsgHdr.Id
+    m.MsgHdr = r.MsgHdr
+    m.MsgHdr.Id = id
     }
 
     w.WriteMsg(m)
