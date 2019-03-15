@@ -18,7 +18,7 @@ func main() {
     }
 }
 
-func makeRequest(name string, qtype uint16) (int, []dns.RR) {
+func makeRequest(name string, qtype uint16) *dns.Msg {
 
     c := new(dns.Client)
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
@@ -31,15 +31,8 @@ func makeRequest(name string, qtype uint16) (int, []dns.RR) {
     if err != nil {
         log.Fatalf("error: %s\n", err)
     }
-    if len(r.Answer) == 0 {
-        log.Printf("could not find NS records for %s", name)
-    }
 
-    /* if r.Rcode != dns.RcodeSuccess {
-        log.Fatalf("invalid answer name for query %s\n", name)
-    } */
-
-    return r.Rcode, r.Answer
+    return r
 }
 
 func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -49,28 +42,32 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
     for _, q := range m.Question {
 
-        rcode, answers := makeRequest(q.Name, q.Qtype)
-        if rcode != dns.RcodeSuccess {
+        r := new(dns.Msg)
+
+        r = makeRequest(q.Name, q.Qtype)
+        if r.Rcode != dns.RcodeSuccess {
             continue
         }
 
-        if len(answers) > 0 {
-            log.Printf("found %v answer(s) for %s", len(answers), q.Name)
-            for _, a := range answers {
+
+        if len(r.Answer) > 0 {
+            log.Printf("found %v answer(s) for %s", len(r.Answer), q.Name)
+            for _, a := range r.Answer{
                 m.Answer = append(m.Answer, a)
             }
 
-        } else {
+        } else if q.Qtype != dns.TypeSOA {
             log.Printf("did not find %s answer for %s", dns.TypeToString[q.Qtype], q.Name)
 
-            if q.Qtype == dns.TypeAAAA {
+            switch q.Qtype {
+            case dns.TypeAAAA:
                 log.Printf("generating synthetic IPv6 addr for %s", q.Name)
 
-                _, answers := makeRequest(q.Name, dns.TypeA)
-                if len(answers) > 0 {
-                    log.Printf("found %v answers for %s", len(answers), q.Name)
+                r = makeRequest(q.Name, dns.TypeA)
+                if len(r.Answer) > 0 {
+                    log.Printf("found %v answers for %s", len(r.Answer), q.Name)
 
-                    for _, a := range answers {
+                    for _, a := range r.Answer{
                         record := a.(*dns.A)
                         rr := &dns.AAAA{
                             Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: record.Hdr.Class, Ttl: record.Hdr.Ttl},
@@ -79,8 +76,11 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
                         m.Answer = append(m.Answer, rr)
                     }
                 }
-            }
         }
+    }
+
+    // carry soa name servers forward
+    m.Ns = r.Ns
     }
 
     w.WriteMsg(m)
