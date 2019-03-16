@@ -10,7 +10,7 @@ import (
 )
 
 var (
-    prefix = net.IP{0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+    prefix = []byte{0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     client = redis.NewClient(&redis.Options{
         Addr: "localhost:32768",
         Password: "",
@@ -22,14 +22,16 @@ func main() {
     dns.HandleFunc(".", handleRequest)
     err := dns.ListenAndServe(":53", "udp6", nil)
     if err != nil {
-        log.Fatal("ListenAndServe: ", err)
+        log.Print("ListenAndServe: ", err)
     }
 }
 
-func makeRequest(name string, qtype uint16, recursion bool) *dns.Msg {
+func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
 
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
     cache_name := strconv.Itoa(int(qtype)) + "-" + name
+    m := new(dns.Msg)
+
 
     // check cache
     val, err := client.Get(cache_name).Result()
@@ -38,31 +40,33 @@ func makeRequest(name string, qtype uint16, recursion bool) *dns.Msg {
         log.Printf("%s not found in cache", name)
 
         c := new(dns.Client)
-        m := new(dns.Msg)
         m.SetQuestion(dns.Fqdn(name), qtype)
         m.RecursionDesired = recursion
 
         r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
         if err != nil {
-            log.Fatalf("error: %s\n", err)
+            log.Printf("error: %s\n", err)
         }
         go func() {
             msg, err := r.Pack()
             err = client.Set(cache_name, msg, 60*time.Second).Err()
             if err != nil {
-                log.Fatalf("error setting cache for %s with error %s", name, err)
+                log.Printf("error setting cache for %s with error %s", name, err)
             } else {
                 log.Printf("added %s to cache", name)
             }
         }()
         return r
 
-    } else {
+    } else if val != "" {
         log.Printf("found %s in cache", name)
-        m := new(dns.Msg)
         m.Unpack([]byte(val))
-        return m
+    } else {
+        // if we can't lookup in cache or dns query, return nxdomain (3) error
+        log.Printf("did not find %s answer for %s in cache or query", dns.TypeToString[qtype], name)
+        m.SetRcode(m, 3)
     }
+    return m
 }
 
 func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
@@ -74,38 +78,39 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
         r := new(dns.Msg)
 
-        r = makeRequest(q.Name, q.Qtype, req.MsgHdr.RecursionDesired)
-        if r.Rcode != dns.RcodeSuccess {
-            continue
-        }
+        r = queryDNS(q.Name, q.Qtype, req.MsgHdr.RecursionDesired)
+        if r.Rcode == dns.RcodeSuccess {
+            if len(r.Answer) > 0 {
+                log.Printf("found %v answer(s) for %s", len(r.Answer), q.Name)
+                for _, a := range r.Answer{
+                    m.Answer = append(m.Answer, a)
+                }
 
-        if len(r.Answer) > 0 {
-            log.Printf("found %v answer(s) for %s", len(r.Answer), q.Name)
-            for _, a := range r.Answer{
-                m.Answer = append(m.Answer, a)
+            } else if q.Qtype != dns.TypeSOA {
+
+                switch q.Qtype {
+                case dns.TypeAAAA:
+                    log.Printf("generating synthetic IPv6 addr for %s", q.Name)
+
+                    r = queryDNS(q.Name, dns.TypeA, req.MsgHdr.RecursionDesired)
+                    if len(r.Answer) > 0 {
+                        log.Printf("found %v answers for %s", len(r.Answer), q.Name)
+
+                        for _, a := range r.Answer{
+                            record := a.(*dns.A)
+                            rr := &dns.AAAA{
+                                Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: record.Hdr.Class, Ttl: record.Hdr.Ttl},
+                                AAAA: makeSyntheticIPv6(record.A),
+                            }
+                            m.Answer = append(m.Answer, rr)
+                        }
+                    }
             }
 
-        } else if q.Qtype != dns.TypeSOA {
-            log.Printf("did not find %s answer for %s", dns.TypeToString[q.Qtype], q.Name)
-
-            switch q.Qtype {
-            case dns.TypeAAAA:
-                log.Printf("generating synthetic IPv6 addr for %s", q.Name)
-
-                r = makeRequest(q.Name, dns.TypeA, req.MsgHdr.RecursionDesired)
-                if len(r.Answer) > 0 {
-                    log.Printf("found %v answers for %s", len(r.Answer), q.Name)
-
-                    for _, a := range r.Answer{
-                        record := a.(*dns.A)
-                        rr := &dns.AAAA{
-                            Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: record.Hdr.Class, Ttl: record.Hdr.Ttl},
-                            AAAA: makeSyntheticIPv6(record.A),
-                        }
-                        m.Answer = append(m.Answer, rr)
-                    }
-                }
+        } else {
+            log.Printf("response code not successful with error %s", dns.RcodeToString[r.Rcode])
         }
+
     }
 
     // carry soa name servers forward
@@ -127,6 +132,6 @@ func makeSyntheticIPv6(ip net.IP) net.IP {
     synth[14] = ip[2]
     synth[15] = ip[3]
 
-    return synth
+    return net.IP(synth)
 
 }
