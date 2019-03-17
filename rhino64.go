@@ -16,9 +16,11 @@ var (
         Password: "",
         DB: 0,
     })
+    client = new(dns.Client)
 )
 
 func main() {
+    client.SingleInflight = true
     dns.HandleFunc(".", handleRequest)
     err := dns.ListenAndServe(":53", "udp6", nil)
     if err != nil {
@@ -38,28 +40,30 @@ func queryDNS(q *dns.Question, qtype uint16, recursion bool) *dns.Msg {
 
         log.Printf("%s not found in cache", q.Name)
 
-        c := new(dns.Client)
         m.SetQuestion(dns.Fqdn(q.Name), qtype)
         m.RecursionDesired = recursion
 
-        r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
+        r, _, err := client.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
         if err != nil {
-            log.Printf("error: %s\n", err)
+            log.Printf("error in query lookup: %s\n", err)
+            return m
         }
-        go func() {
-            msg, err := r.Pack()
-            if err != nil {
-                log.Printf("unable to pack response for %s", q.Name)
-            } else {
-                err = cache.Set(cacheKey, msg, 60*time.Second).Err()
+        if r.Rcode == dns.RcodeSuccess {
+            go func() {
+                msg, err := r.Pack()
                 if err != nil {
-                    log.Printf("error setting cache for %s with error %s", q.Name, err)
+                    log.Printf("unable to pack response for %s", q.Name)
                 } else {
-                    log.Printf("added %s to cache", q.Name)
+                    err = cache.Set(cacheKey, msg, 60*time.Second).Err()
+                    if err != nil {
+                        log.Printf("error setting cache for %s with error %s", q.Name, err)
+                    } else {
+                        log.Printf("added %s to cache", q.Name)
+                    }
                 }
-            }
-        }()
-        return r
+            }()
+            return r
+        }
 
     } else if val != "" && err != redis.Nil {
         log.Printf("found %s in cache", q.Name)
@@ -100,12 +104,17 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
                         log.Printf("found %v answers for %s", len(r.Answer), q.Name)
 
                         for _, a := range r.Answer{
-                            record := a.(*dns.A)
-                            rr := &dns.AAAA{
-                                Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: record.Hdr.Class, Ttl: record.Hdr.Ttl},
-                                AAAA: makeSyntheticIPv6(record.A),
+                            switch a.(type) {
+                            case (*dns.A):
+                                record := a.(*dns.A)
+                                rr := &dns.AAAA{
+                                    Hdr:  dns.RR_Header{Name: q.Name, Rrtype: dns.TypeAAAA, Class: record.Hdr.Class, Ttl: record.Hdr.Ttl},
+                                    AAAA: makeSyntheticIPv6(record.A),
+                                }
+                                m.Answer = append(m.Answer, rr)
+                            case (*dns.CNAME):
+                                log.Println("got CNAME in AAAA query. Not yet implemented")
                             }
-                            m.Answer = append(m.Answer, rr)
                         }
                     }
             }
