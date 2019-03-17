@@ -26,20 +26,20 @@ func main() {
     }
 }
 
-func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
+func queryDNS(q *dns.Question, qtype uint16, recursion bool) *dns.Msg {
 
-    log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
-    cacheKey := strconv.Itoa(int(qtype)) + "-" + name
+    log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], q.Name)
+    cacheKey := strconv.Itoa(int(qtype)) + "-" + q.Name
     m := new(dns.Msg)
 
     // check cache
     val, err := cache.Get(cacheKey).Result()
-    if val == "" && err != redis.Nil {
+    if val == "" && err == redis.Nil {
 
-        log.Printf("%s not found in cache", name)
+        log.Printf("%s not found in cache", q.Name)
 
         c := new(dns.Client)
-        m.SetQuestion(dns.Fqdn(name), qtype)
+        m.SetQuestion(dns.Fqdn(q.Name), qtype)
         m.RecursionDesired = recursion
 
         r, _, err := c.Exchange(m, net.JoinHostPort("8.8.8.8", "53"))
@@ -49,25 +49,24 @@ func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
         go func() {
             msg, err := r.Pack()
             if err != nil {
-                log.Printf("unable to pack response for %s", name)
+                log.Printf("unable to pack response for %s", q.Name)
             } else {
                 err = cache.Set(cacheKey, msg, 60*time.Second).Err()
                 if err != nil {
-                    log.Printf("error setting cache for %s with error %s", name, err)
+                    log.Printf("error setting cache for %s with error %s", q.Name, err)
                 } else {
-                    log.Printf("added %s to cache", name)
+                    log.Printf("added %s to cache", q.Name)
                 }
             }
         }()
         return r
 
-    } else if val != "" && err == redis.Nil {
-        log.Printf("found %s in cache", name)
+    } else if val != "" && err != redis.Nil {
+        log.Printf("found %s in cache", q.Name)
         m.Unpack([]byte(val))
     } else {
-        log.Print(err)
         // if we can't lookup in cache or dns query, return servfail (2) error
-        log.Printf("did not find %s answer for %s in cache or query", dns.TypeToString[qtype], name)
+        log.Printf("did not find %s answer for %s in cache or query", dns.TypeToString[qtype], q.Name)
         m.SetRcode(m, dns.RcodeServerFailure)
     }
     return m
@@ -82,7 +81,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
 
         r := new(dns.Msg)
 
-        r = queryDNS(q.Name, q.Qtype, req.MsgHdr.RecursionDesired)
+        r = queryDNS(&q, q.Qtype, req.MsgHdr.RecursionDesired)
         if r.Rcode == dns.RcodeSuccess {
             if len(r.Answer) > 0 {
                 log.Printf("got %v answer(s) for %s", len(r.Answer), q.Name)
@@ -96,7 +95,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
                 case dns.TypeAAAA:
                     log.Printf("generating synthetic IPv6 addr for %s", q.Name)
 
-                    r = queryDNS(q.Name, dns.TypeA, req.MsgHdr.RecursionDesired)
+                    r = queryDNS(&q, dns.TypeA, req.MsgHdr.RecursionDesired)
                     if len(r.Answer) > 0 {
                         log.Printf("found %v answers for %s", len(r.Answer), q.Name)
 
