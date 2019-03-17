@@ -29,11 +29,11 @@ func main() {
 func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
 
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
-    cache_name := strconv.Itoa(int(qtype)) + "-" + name
+    cacheName := strconv.Itoa(int(qtype)) + "-" + name
     m := new(dns.Msg)
 
     // check cache
-    val, err := client.Get(cache_name).Result()
+    val, err := client.Get(cacheName).Result()
     if val == "" && err != redis.Nil {
 
         log.Printf("%s not found in cache", name)
@@ -48,11 +48,15 @@ func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
         }
         go func() {
             msg, err := r.Pack()
-            err = client.Set(cache_name, msg, 60*time.Second).Err()
             if err != nil {
-                log.Printf("error setting cache for %s with error %s", name, err)
+                log.Printf("unable to pack response for %s", name)
             } else {
-                log.Printf("added %s to cache", name)
+                err = client.Set(cacheName, msg, 60*time.Second).Err()
+                if err != nil {
+                    log.Printf("error setting cache for %s with error %s", name, err)
+                } else {
+                    log.Printf("added %s to cache", name)
+                }
             }
         }()
         return r
