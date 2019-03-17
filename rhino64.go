@@ -32,10 +32,9 @@ func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
     cache_name := strconv.Itoa(int(qtype)) + "-" + name
     m := new(dns.Msg)
 
-
     // check cache
     val, err := client.Get(cache_name).Result()
-    if err == redis.Nil {
+    if val == "" && err != redis.Nil {
 
         log.Printf("%s not found in cache", name)
 
@@ -58,13 +57,14 @@ func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
         }()
         return r
 
-    } else if val != "" {
+    } else if val != "" && err == redis.Nil {
         log.Printf("found %s in cache", name)
         m.Unpack([]byte(val))
     } else {
-        // if we can't lookup in cache or dns query, return nxdomain (3) error
+        log.Print(err)
+        // if we can't lookup in cache or dns query, return servfail (2) error
         log.Printf("did not find %s answer for %s in cache or query", dns.TypeToString[qtype], name)
-        m.SetRcode(m, 3)
+        m.SetRcode(m, dns.RcodeServerFailure)
     }
     return m
 }
@@ -81,7 +81,7 @@ func handleRequest(w dns.ResponseWriter, req *dns.Msg) {
         r = queryDNS(q.Name, q.Qtype, req.MsgHdr.RecursionDesired)
         if r.Rcode == dns.RcodeSuccess {
             if len(r.Answer) > 0 {
-                log.Printf("found %v answer(s) for %s", len(r.Answer), q.Name)
+                log.Printf("got %v answer(s) for %s", len(r.Answer), q.Name)
                 for _, a := range r.Answer{
                     m.Answer = append(m.Answer, a)
                 }
