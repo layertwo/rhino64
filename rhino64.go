@@ -11,7 +11,7 @@ import (
 
 var (
     prefix = []byte{0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
-    client = redis.NewClient(&redis.Options{
+    cache = redis.NewClient(&redis.Options{
         Addr: "localhost:32768",
         Password: "",
         DB: 0,
@@ -29,11 +29,11 @@ func main() {
 func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
 
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], name)
-    cacheName := strconv.Itoa(int(qtype)) + "-" + name
+    cacheKey := strconv.Itoa(int(qtype)) + "-" + name
     m := new(dns.Msg)
 
     // check cache
-    val, err := client.Get(cacheName).Result()
+    val, err := cache.Get(cacheKey).Result()
     if val == "" && err != redis.Nil {
 
         log.Printf("%s not found in cache", name)
@@ -51,7 +51,7 @@ func queryDNS(name string, qtype uint16, recursion bool) *dns.Msg {
             if err != nil {
                 log.Printf("unable to pack response for %s", name)
             } else {
-                err = client.Set(cacheName, msg, 60*time.Second).Err()
+                err = cache.Set(cacheKey, msg, 60*time.Second).Err()
                 if err != nil {
                     log.Printf("error setting cache for %s with error %s", name, err)
                 } else {
