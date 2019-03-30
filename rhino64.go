@@ -7,36 +7,54 @@ import (
     "net"
     "strconv"
     "time"
+    "os"
 )
 
 var (
     prefix = []byte{0, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
     cache = redis.NewClient(&redis.Options{
-        Addr: "localhost:32768",
+        Addr: "redis:32768",
         Password: "",
         DB: 0,
     })
     client = new(dns.Client)
+    port = int(53)
 )
 
 func main() {
+    log.SetOutput(os.Stdout)
+    log.Println("starting rhino64...")
     client.SingleInflight = true
     dns.HandleFunc(".", handleRequest)
     err := dns.ListenAndServe(":53", "udp6", nil)
     if err != nil {
-        log.Print("ListenAndServe: ", err)
+        log.Printf("ListenAndServe: ", err)
+    } else {
+        log.Printf("listening on port %s", port)
     }
+}
+
+func pushToCache(key *string, name *string, msg *[]byte) {
+    log.Printf("key: %s, name: %s", *key, *name)
+
+    err := cache.Set(*key, msg, 60*time.Second).Err()
+    if err != nil {
+        log.Printf("error setting cache for %s with error %s", *name, err)
+    } else {
+        log.Printf("added %s to cache", *name)
+    }
+
 }
 
 func queryDNS(q *dns.Question, qtype uint16, recursion bool) *dns.Msg {
 
     log.Printf("querying %s record for %s\n", dns.TypeToString[qtype], q.Name)
-    cacheKey := strconv.Itoa(int(qtype)) + "-" + q.Name
+    cacheKey := strconv.Itoa(int(qtype)) + "_" + q.Name
     m := new(dns.Msg)
 
     // check cache
     val, err := cache.Get(cacheKey).Result()
-    if val == "" && err == redis.Nil {
+    if val == "" {
 
         log.Printf("%s not found in cache", q.Name)
 
@@ -48,20 +66,13 @@ func queryDNS(q *dns.Question, qtype uint16, recursion bool) *dns.Msg {
             log.Printf("error in query lookup: %s\n", err)
             return m
         }
-        if r.Rcode == dns.RcodeSuccess {
-            go func() {
-                msg, err := r.Pack()
-                if err != nil {
-                    log.Printf("unable to pack response for %s", q.Name)
-                } else {
-                    err = cache.Set(cacheKey, msg, 60*time.Second).Err()
-                    if err != nil {
-                        log.Printf("error setting cache for %s with error %s", q.Name, err)
-                    } else {
-                        log.Printf("added %s to cache", q.Name)
-                    }
-                }
-            }()
+        if r.Rcode == dns.RcodeSuccess && err == redis.Nil {
+            msg, err := r.Pack()
+            if err != nil {
+                log.Printf("unable to pack response for %s", q.Name)
+            } else {
+                go pushToCache(&cacheKey, &q.Name, &msg)
+            }
             return r
         }
 

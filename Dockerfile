@@ -8,5 +8,5 @@ RUN go build -o rhino64 .
 FROM alpine
 COPY --from=builder /build/rhino64 /app/
 WORKDIR /app
-EXPOSE 5353:53/udp
+EXPOSE 53:5353/udp
 ENTRYPOINT ["./rhino64"]

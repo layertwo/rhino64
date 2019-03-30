@@ -1,0 +1,8 @@
+version: '3'
+services:
+    rhino64:
+        image: "rhino64:latest"
+        ports:
+            - "5353:5353/udp"
+    redis:
+        image: "redis:alpine"
